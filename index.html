@@ -14,28 +14,24 @@
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
       touch-action: none;
     }
-
-    #game {
+    canvas {
       display: block;
       width: 100vw;
       height: 100vh;
-      background:
-        linear-gradient(#5c94fc 0%, #7db7ff 60%, #b8e6ff 100%);
+      background: linear-gradient(#5c94fc 0%, #7db7ff 60%, #d7f0ff 100%);
     }
 
     .hud {
       position: fixed;
-      top: 14px;
+      top: 12px;
       left: 14px;
       right: 14px;
       z-index: 20;
       display: flex;
       justify-content: space-between;
-      align-items: center;
-      color: white;
-      text-shadow: 0 2px 4px rgba(0,0,0,0.35);
+      color: #fff;
       font-weight: 700;
-      font-size: 15px;
+      text-shadow: 0 2px 6px rgba(0,0,0,.35);
       pointer-events: none;
     }
 
@@ -45,47 +41,573 @@
       top: 18%;
       transform: translateX(-50%);
       z-index: 30;
-      min-width: 260px;
-      max-width: 86vw;
+      width: min(88vw, 340px);
+      padding: 18px 16px;
+      border-radius: 18px;
+      color: #fff;
       text-align: center;
-      color: white;
-      background: rgba(0,0,0,0.35);
-      border: 1px solid rgba(255,255,255,0.18);
+      background: rgba(0,0,0,.32);
+      border: 1px solid rgba(255,255,255,.16);
       backdrop-filter: blur(10px);
       -webkit-backdrop-filter: blur(10px);
-      border-radius: 18px;
-      padding: 18px 16px;
       display: none;
-      box-shadow: 0 12px 32px rgba(0,0,0,0.28);
     }
-
     .message.show { display: block; }
-
-    .message h2 {
-      margin: 0 0 8px;
-      font-size: 22px;
-    }
-
-    .message p {
-      margin: 0 0 14px;
-      font-size: 14px;
-      line-height: 1.5;
-      opacity: 0.95;
-    }
-
+    .message h2 { margin: 0 0 8px; font-size: 22px; }
+    .message p { margin: 0 0 14px; line-height: 1.5; font-size: 14px; }
     .message button {
-      appearance: none;
       border: none;
       border-radius: 999px;
-      background: white;
-      color: #111;
       padding: 10px 18px;
       font-weight: 700;
+      background: #fff;
+      color: #111;
       font-size: 14px;
     }
 
     .controls {
       position: fixed;
       inset: 0;
-      pointer-events: none;
       z-index: 25;
+      pointer-events: none;
+    }
+    .left-pad, .right-pad {
+      position: absolute;
+      bottom: max(18px, env(safe-area-inset-bottom));
+      display: flex;
+      gap: 14px;
+      pointer-events: auto;
+    }
+    .left-pad { left: 18px; }
+    .right-pad { right: 18px; }
+
+    .btn {
+      width: 74px;
+      height: 74px;
+      border-radius: 50%;
+      border: 1px solid rgba(255,255,255,.18);
+      background: rgba(0,0,0,.28);
+      color: #fff;
+      font-size: 28px;
+      font-weight: 700;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      backdrop-filter: blur(8px);
+      -webkit-backdrop-filter: blur(8px);
+      user-select: none;
+    }
+    .btn:active { transform: scale(.96); }
+
+    .hint {
+      position: fixed;
+      left: 50%;
+      bottom: calc(max(18px, env(safe-area-inset-bottom)) + 86px);
+      transform: translateX(-50%);
+      z-index: 20;
+      color: rgba(255,255,255,.88);
+      font-size: 13px;
+      text-shadow: 0 2px 6px rgba(0,0,0,.35);
+      pointer-events: none;
+    }
+  </style>
+</head>
+<body>
+  <canvas id="game"></canvas>
+
+  <div class="hud">
+    <div>COINS: <span id="coins">0</span></div>
+    <div>LIVES: <span id="lives">3</span></div>
+  </div>
+
+  <div class="hint">左下左右移动，右下跳跃</div>
+
+  <div class="message" id="messageBox">
+    <h2 id="messageTitle">开始游戏</h2>
+    <p id="messageText">到达终点旗帜，避开敌人并收集金币。</p>
+    <button id="restartBtn">开始 / 重来</button>
+  </div>
+
+  <div class="controls">
+    <div class="left-pad">
+      <div class="btn" id="leftBtn">◀</div>
+      <div class="btn" id="rightBtn">▶</div>
+    </div>
+    <div class="right-pad">
+      <div class="btn" id="jumpBtn">⤒</div>
+    </div>
+  </div>
+
+  <script>
+    const canvas = document.getElementById("game");
+    const ctx = canvas.getContext("2d");
+
+    const coinsEl = document.getElementById("coins");
+    const livesEl = document.getElementById("lives");
+    const messageBox = document.getElementById("messageBox");
+    const messageTitle = document.getElementById("messageTitle");
+    const messageText = document.getElementById("messageText");
+    const restartBtn = document.getElementById("restartBtn");
+
+    function resizeCanvas() {
+      canvas.width = window.innerWidth * devicePixelRatio;
+      canvas.height = window.innerHeight * devicePixelRatio;
+      canvas.style.width = window.innerWidth + "px";
+      canvas.style.height = window.innerHeight + "px";
+      ctx.setTransform(devicePixelRatio, 0, 0, devicePixelRatio, 0, 0);
+    }
+    resizeCanvas();
+    window.addEventListener("resize", resizeCanvas);
+
+    const keys = { left: false, right: false, jump: false };
+
+    const world = {
+      width: 2600,
+      gravity: 0.75,
+      groundY: 0
+    };
+
+    function makeLevel() {
+      const vh = window.innerHeight;
+      world.groundY = vh - 90;
+
+      return {
+        platforms: [
+          { x: 0, y: world.groundY, w: 3200, h: 120, type: "ground" },
+          { x: 320, y: world.groundY - 110, w: 170, h: 20, type: "brick" },
+          { x: 620, y: world.groundY - 180, w: 160, h: 20, type: "brick" },
+          { x: 930, y: world.groundY - 120, w: 180, h: 20, type: "brick" },
+          { x: 1260, y: world.groundY - 210, w: 190, h: 20, type: "brick" },
+          { x: 1620, y: world.groundY - 160, w: 170, h: 20, type: "brick" },
+          { x: 1940, y: world.groundY - 240, w: 180, h: 20, type: "brick" }
+        ],
+        coins: [
+          { x: 380, y: world.groundY - 150, r: 13, taken: false },
+          { x: 460, y: world.groundY - 150, r: 13, taken: false },
+          { x: 680, y: world.groundY - 220, r: 13, taken: false },
+          { x: 740, y: world.groundY - 220, r: 13, taken: false },
+          { x: 1010, y: world.groundY - 160, r: 13, taken: false },
+          { x: 1340, y: world.groundY - 250, r: 13, taken: false },
+          { x: 1710, y: world.groundY - 210, r: 13, taken: false },
+          { x: 2010, y: world.groundY - 290, r: 13, taken: false }
+        ],
+        enemies: [
+          { x: 760, y: world.groundY - 40, w: 36, h: 36, vx: 1.2, minX: 700, maxX: 880, alive: true },
+          { x: 1510, y: world.groundY - 40, w: 36, h: 36, vx: 1.4, minX: 1440, maxX: 1620, alive: true },
+          { x: 2100, y: world.groundY - 280, w: 36, h: 36, vx: 1.1, minX: 1980, maxX: 2120, alive: true }
+        ],
+        flag: { x: 2400, y: world.groundY - 240, w: 14, h: 240 }
+      };
+    }
+
+    let level = makeLevel();
+
+    const player = {
+      x: 80,
+      y: world.groundY - 58,
+      w: 38,
+      h: 54,
+      vx: 0,
+      vy: 0,
+      speed: 0.9,
+      maxSpeed: 7,
+      jumpPower: 16,
+      onGround: false,
+      facing: 1
+    };
+
+    let cameraX = 0;
+    let scoreCoins = 0;
+    let lives = 3;
+    let gameState = "start";
+
+    function showMessage(title, text, buttonText = "重来") {
+      messageTitle.textContent = title;
+      messageText.textContent = text;
+      restartBtn.textContent = buttonText;
+      messageBox.classList.add("show");
+    }
+
+    function hideMessage() {
+      messageBox.classList.remove("show");
+    }
+
+    function resetPlayerPosition() {
+      player.x = 80;
+      player.y = world.groundY - player.h;
+      player.vx = 0;
+      player.vy = 0;
+      player.onGround = false;
+    }
+
+    function resetGame(fullReset = true) {
+      level = makeLevel();
+      resetPlayerPosition();
+      cameraX = 0;
+      if (fullReset) {
+        scoreCoins = 0;
+        lives = 3;
+      }
+      updateHUD();
+      gameState = "running";
+      hideMessage();
+    }
+
+    function updateHUD() {
+      coinsEl.textContent = scoreCoins;
+      livesEl.textContent = lives;
+    }
+
+    function rectsOverlap(a, b) {
+      return a.x < b.x + b.w &&
+             a.x + a.w > b.x &&
+             a.y < b.y + b.h &&
+             a.y + a.h > b.y;
+    }
+
+    function circleRectOverlap(circle, rect) {
+      const closestX = Math.max(rect.x, Math.min(circle.x, rect.x + rect.w));
+      const closestY = Math.max(rect.y, Math.min(circle.y, rect.y + rect.h));
+      const dx = circle.x - closestX;
+      const dy = circle.y - closestY;
+      return dx * dx + dy * dy < circle.r * circle.r;
+    }
+
+    function updatePlayer() {
+      if (keys.left) {
+        player.vx -= player.speed;
+        player.facing = -1;
+      }
+      if (keys.right) {
+        player.vx += player.speed;
+        player.facing = 1;
+      }
+
+      if (!keys.left && !keys.right) {
+        player.vx *= 0.82;
+      }
+
+      player.vx = Math.max(-player.maxSpeed, Math.min(player.maxSpeed, player.vx));
+
+      if (keys.jump && player.onGround) {
+        player.vy = -player.jumpPower;
+        player.onGround = false;
+      }
+
+      player.vy += world.gravity;
+      if (player.vy > 18) player.vy = 18;
+
+      player.x += player.vx;
+
+      for (const p of level.platforms) {
+        if (rectsOverlap(player, p)) {
+          if (player.vx > 0) player.x = p.x - player.w;
+          if (player.vx < 0) player.x = p.x + p.w;
+          player.vx = 0;
+        }
+      }
+
+      player.y += player.vy;
+      player.onGround = false;
+
+      for (const p of level.platforms) {
+        if (rectsOverlap(player, p)) {
+          if (player.vy > 0) {
+            player.y = p.y - player.h;
+            player.vy = 0;
+            player.onGround = true;
+          } else if (player.vy < 0) {
+            player.y = p.y + p.h;
+            player.vy = 0;
+          }
+        }
+      }
+
+      if (player.x < 0) player.x = 0;
+      if (player.x + player.w > world.width) player.x = world.width - player.w;
+
+      if (player.y > window.innerHeight + 200) {
+        loseLife();
+      }
+    }
+
+    function updateCoins() {
+      for (const coin of level.coins) {
+        if (!coin.taken && circleRectOverlap(coin, player)) {
+          coin.taken = true;
+          scoreCoins += 1;
+          updateHUD();
+        }
+      }
+    }
+
+    function updateEnemies() {
+      for (const enemy of level.enemies) {
+        if (!enemy.alive) continue;
+
+        enemy.x += enemy.vx;
+        if (enemy.x < enemy.minX || enemy.x > enemy.maxX) {
+          enemy.vx *= -1;
+        }
+
+        if (rectsOverlap(player, enemy)) {
+          const playerBottom = player.y + player.h;
+          const enemyTop = enemy.y;
+
+          if (player.vy > 0 && playerBottom - enemyTop < 24) {
+            enemy.alive = false;
+            player.vy = -10;
+          } else {
+            loseLife();
+            return;
+          }
+        }
+      }
+    }
+
+    function updateFlag() {
+      const flagRect = {
+        x: level.flag.x - 8,
+        y: level.flag.y,
+        w: 28,
+        h: level.flag.h
+      };
+      if (rectsOverlap(player, flagRect)) {
+        gameState = "win";
+        showMessage("过关了", `你收集了 ${scoreCoins} 枚金币。`, "再玩一次");
+      }
+    }
+
+    function loseLife() {
+      if (gameState !== "running") return;
+      lives -= 1;
+      updateHUD();
+
+      if (lives <= 0) {
+        gameState = "gameover";
+        showMessage("游戏结束", `你收集了 ${scoreCoins} 枚金币。`, "重新开始");
+      } else {
+        resetPlayerPosition();
+      }
+    }
+
+    function updateCamera() {
+      const target = player.x - window.innerWidth * 0.35;
+      cameraX += (target - cameraX) * 0.12;
+      cameraX = Math.max(0, Math.min(cameraX, world.width - window.innerWidth));
+    }
+
+    function drawCloud(x, y, s = 1) {
+      ctx.fillStyle = "rgba(255,255,255,0.9)";
+      ctx.beginPath();
+      ctx.arc(x, y, 18 * s, 0, Math.PI * 2);
+      ctx.arc(x + 20 * s, y - 8 * s, 22 * s, 0, Math.PI * 2);
+      ctx.arc(x + 44 * s, y, 18 * s, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    function drawBackground() {
+      ctx.fillStyle = "#5c94fc";
+      ctx.fillRect(0, 0, window.innerWidth, window.innerHeight);
+
+      drawCloud(100 - cameraX * 0.15, 90, 1.1);
+      drawCloud(360 - cameraX * 0.12, 140, 0.9);
+      drawCloud(700 - cameraX * 0.18, 100, 1.2);
+      drawCloud(1100 - cameraX * 0.14, 130, 1.0);
+      drawCloud(1500 - cameraX * 0.1, 85, 1.15);
+      drawCloud(1950 - cameraX * 0.16, 120, 1.0);
+
+      ctx.fillStyle = "#6bbf59";
+      for (let i = 0; i < 18; i++) {
+        const hillX = i * 180 - (cameraX * 0.45 % 180);
+        ctx.beginPath();
+        ctx.arc(hillX, world.groundY + 40, 120, Math.PI, 0);
+        ctx.fill();
+      }
+    }
+
+    function drawPlatforms() {
+      for (const p of level.platforms) {
+        if (p.type === "ground") {
+          ctx.fillStyle = "#8b5a2b";
+          ctx.fillRect(p.x - cameraX, p.y, p.w, p.h);
+
+          ctx.fillStyle = "#3fbf3f";
+          ctx.fillRect(p.x - cameraX, p.y, p.w, 18);
+
+          for (let x = p.x - cameraX; x < p.x - cameraX + p.w; x += 28) {
+            ctx.fillStyle = "#2fa12f";
+            ctx.fillRect(x, p.y + 6, 14, 6);
+          }
+        } else {
+          ctx.fillStyle = "#b86f2d";
+          ctx.fillRect(p.x - cameraX, p.y, p.w, p.h);
+          ctx.strokeStyle = "#8d4d12";
+          for (let x = 0; x < p.w; x += 28) {
+            ctx.strokeRect(p.x - cameraX + x, p.y, 28, p.h);
+          }
+        }
+      }
+    }
+
+    function drawCoins() {
+      for (const coin of level.coins) {
+        if (coin.taken) continue;
+        ctx.fillStyle = "#ffd84d";
+        ctx.beginPath();
+        ctx.arc(coin.x - cameraX, coin.y, coin.r, 0, Math.PI * 2);
+        ctx.fill();
+
+        ctx.strokeStyle = "#f3b400";
+        ctx.lineWidth = 3;
+        ctx.beginPath();
+        ctx.arc(coin.x - cameraX, coin.y, coin.r - 2, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+    }
+
+    function drawEnemies() {
+      for (const enemy of level.enemies) {
+        if (!enemy.alive) continue;
+        ctx.fillStyle = "#8b4513";
+        ctx.beginPath();
+        ctx.ellipse(enemy.x - cameraX + enemy.w / 2, enemy.y + enemy.h / 2 + 4, enemy.w / 2, enemy.h / 2, 0, 0, Math.PI * 2);
+        ctx.fill();
+
+        ctx.fillStyle = "#f5d7b2";
+        ctx.fillRect(enemy.x - cameraX + 6, enemy.y + 8, enemy.w - 12, 10);
+
+        ctx.fillStyle = "#000";
+        ctx.fillRect(enemy.x - cameraX + 8, enemy.y + enemy.h - 7, 8, 5);
+        ctx.fillRect(enemy.x - cameraX + enemy.w - 16, enemy.y + enemy.h - 7, 8, 5);
+      }
+    }
+
+    function drawFlag() {
+      ctx.fillStyle = "#ddd";
+      ctx.fillRect(level.flag.x - cameraX, level.flag.y, level.flag.w, level.flag.h);
+
+      ctx.fillStyle = "#2ecc71";
+      ctx.beginPath();
+      ctx.moveTo(level.flag.x - cameraX + level.flag.w, level.flag.y + 10);
+      ctx.lineTo(level.flag.x - cameraX + 70, level.flag.y + 30);
+      ctx.lineTo(level.flag.x - cameraX + level.flag.w, level.flag.y + 50);
+      ctx.closePath();
+      ctx.fill();
+    }
+
+    function drawPlayer() {
+      const x = player.x - cameraX;
+      const y = player.y;
+
+      ctx.fillStyle = "#e53935";
+      ctx.fillRect(x + 8, y, 22, 12);     // 帽子
+      ctx.fillRect(x + 4, y + 12, 30, 16); // 上身
+
+      ctx.fillStyle = "#1976d2";
+      ctx.fillRect(x + 8, y + 28, 22, 18); // 背带裤
+
+      ctx.fillStyle = "#f5d7b2";
+      ctx.fillRect(x + 10, y + 10, 16, 14); // 脸
+
+      ctx.fillStyle = "#8d5524";
+      ctx.fillRect(x + 24, y + 16, 8, 4); // 鼻子/胡子感
+
+      ctx.fillStyle = "#5d4037";
+      ctx.fillRect(x + 6, y + 46, 10, 8); // 左鞋
+      ctx.fillRect(x + 22, y + 46, 10, 8); // 右鞋
+    }
+
+    function update() {
+      if (gameState !== "running") return;
+      updatePlayer();
+      updateCoins();
+      updateEnemies();
+      updateFlag();
+      updateCamera();
+    }
+
+    function draw() {
+      drawBackground();
+      drawPlatforms();
+      drawCoins();
+      drawEnemies();
+      drawFlag();
+      drawPlayer();
+    }
+
+    function loop() {
+      update();
+      draw();
+      requestAnimationFrame(loop);
+    }
+
+    function bindHoldButton(el, keyName) {
+      const down = (e) => {
+        e.preventDefault();
+        keys[keyName] = true;
+      };
+      const up = (e) => {
+        e.preventDefault();
+        keys[keyName] = false;
+      };
+
+      el.addEventListener("touchstart", down, { passive: false });
+      el.addEventListener("touchend", up, { passive: false });
+      el.addEventListener("touchcancel", up, { passive: false });
+
+      el.addEventListener("mousedown", down);
+      el.addEventListener("mouseup", up);
+      el.addEventListener("mouseleave", up);
+    }
+
+    bindHoldButton(document.getElementById("leftBtn"), "left");
+    bindHoldButton(document.getElementById("rightBtn"), "right");
+
+    const jumpBtn = document.getElementById("jumpBtn");
+    jumpBtn.addEventListener("touchstart", (e) => {
+      e.preventDefault();
+      if (player.onGround && gameState === "running") {
+        keys.jump = true;
+      }
+    }, { passive: false });
+
+    jumpBtn.addEventListener("touchend", (e) => {
+      e.preventDefault();
+      keys.jump = false;
+    }, { passive: false });
+
+    jumpBtn.addEventListener("mousedown", (e) => {
+      e.preventDefault();
+      if (player.onGround && gameState === "running") {
+        keys.jump = true;
+      }
+    });
+
+    jumpBtn.addEventListener("mouseup", () => keys.jump = false);
+    jumpBtn.addEventListener("mouseleave", () => keys.jump = false);
+
+    document.addEventListener("keydown", (e) => {
+      if (e.key === "ArrowLeft") keys.left = true;
+      if (e.key === "ArrowRight") keys.right = true;
+      if ((e.key === " " || e.key === "ArrowUp") && player.onGround && gameState === "running") {
+        keys.jump = true;
+      }
+    });
+
+    document.addEventListener("keyup", (e) => {
+      if (e.key === "ArrowLeft") keys.left = false;
+      if (e.key === "ArrowRight") keys.right = false;
+      if (e.key === " " || e.key === "ArrowUp") keys.jump = false;
+    });
+
+    restartBtn.addEventListener("click", () => {
+      resetGame(true);
+    });
+
+    updateHUD();
+    showMessage("开始游戏", "到达终点旗帜，避开敌人并收集金币。", "开始");
+    loop();
+  </script>
+</body>
+</html>
